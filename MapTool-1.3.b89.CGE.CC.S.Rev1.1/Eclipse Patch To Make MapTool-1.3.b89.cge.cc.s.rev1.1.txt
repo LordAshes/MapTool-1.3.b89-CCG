@@ -1,0 +1,1235 @@
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/AudioChannel.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/AudioChannel.java	(revision 0)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/AudioChannel.java	(revision 0)
+@@ -0,0 +1,171 @@
++package net.rptools.maptool.client;
++
++import java.net.URL;
++import java.io.File;
++
++import javax.sound.sampled.AudioSystem;
++import javax.sound.sampled.Clip;
++import javax.sound.sampled.Line;
++
++public class AudioChannel implements Runnable
++{
++	Clip sound;
++	String AudioFileRepository;
++	String AudioFileLocal;
++	int Loop = 1;
++	int Mute = 0;
++	int Lock = 0;
++	boolean CacheOnExit = false;
++	
++	public void run()
++	{
++		// Play Command
++		try
++		{
++			sound = (Clip) AudioSystem.getLine(new Line.Info(Clip.class));
++					
++			try
++			{
++				// Try Local Copy First
++				File srcLocal = new File(AudioFileLocal);
++				if(srcLocal.exists()==true)
++				{
++					// Local Copy Exists - Play It
++					System.out.println("Trying To Play '"+AudioFileLocal+"', "+Loop+" Repetitions");
++					sound.open(AudioSystem.getAudioInputStream(srcLocal));
++					if(Loop<0){sound.loop(sound.LOOP_CONTINUOUSLY);}else{sound.loop(Loop-1);}
++				}
++				else
++				{
++					// Local Copy Does Not Exist - Throw Exception To Try Repository Copy
++					System.out.println("");
++					throw new Exception();
++				}
++			}
++			catch(Exception ex)
++			{
++				// Try Repository (Cache Version) Copy Second
++				System.out.println("Trying To Play '"+AudioFileRepository+"', "+Loop+" Repetitions");
++				CacheOnExit = true;
++				try
++				{
++					sound.open(AudioSystem.getAudioInputStream(new URL(AudioFileRepository)));
++					if(Loop<0){sound.loop(sound.LOOP_CONTINUOUSLY);}else{sound.loop(Loop-1);}
++				}
++				catch(Exception ex2)
++				{
++					// Try Repository (Cache Version) Copy Second
++					try
++					{
++						String AudioFileRepositoryNoCache = AudioFileRepository.replace(".wav",".no-cache.wav"); 
++						System.out.println("Trying To Play '"+AudioFileRepositoryNoCache+"', "+Loop+" Repetitions");
++						sound.open(AudioSystem.getAudioInputStream(new URL(AudioFileRepositoryNoCache)));
++						if(Loop<0){sound.loop(sound.LOOP_CONTINUOUSLY);}else{sound.loop(Loop-1);}						
++					}
++					catch(Exception ex3)
++					{
++						System.out.println("Could Not Play File From Repository");
++					}
++				}
++			}
++			sound.start();
++			// Wait for audio file to start playing
++			Thread.sleep(1000);
++			// Loop until audio file stops playing
++			while(sound.isActive())
++			{
++				Thread.sleep(100);
++			}
++			sound.stop();
++			sound.close();
++			System.out.println("Audio Concluded");
++			if(CacheOnExit==true){cacheAudio();}			
++		}
++		catch(InterruptedException e)
++		{
++			// Thread Interrupt 
++			sound.stop();
++			sound.close();
++			System.out.println("Audio Interrupted");
++			if(CacheOnExit==true){cacheAudio();}
++		}		
++		catch(Exception e)
++		{
++			// Audio file not found?
++		}		
++	}
++
++	public void cacheAudio()
++	{
++		System.out.println("Attempting To Cache "+AudioFileRepository+" in "+AudioFileLocal);
++		try
++		{
++			// Try to copy URL to Local
++			URL src = new URL(AudioFileRepository);
++			File dst = new File(AudioFileLocal);
++			org.apache.commons.io.FileUtils.copyURLToFile(src,dst);
++			System.out.println("Success To Cache "+AudioFileRepository+" in "+AudioFileLocal);
++		}
++		catch(Exception ex)
++		{		
++			// Problem Copying Audio
++			System.out.println("Failure To Cache "+AudioFileRepository+" in "+AudioFileLocal);
++		}
++	}
++	
++	public void play(String param)
++	{
++		// Set Play Audio Locations
++		AudioFileRepository = MapTool.AudioRepositoryLocation+param;
++		AudioFileRepository = AudioFileRepository.replace(" ","_");
++		AudioFileLocal = AppUtil.getAppHome("assetcache").getPath()+"\\"+param.replace(" ", "_");
++	}
++	
++	public void finish()
++	{
++		// Finish Current Repetition But Play No Additional Repetitions (If Any Outstanding)
++		sound.loop(0);
++	}
++	
++	public void loops(int repetitions)
++	{
++		// Set Repetitions For Future Play
++		Loop = repetitions;
++	}
++	
++	public void mute(int state)
++	{
++		// Set Mute State (EarPlugs)
++		Mute = state;
++	}
++
++	public int loops()
++	{
++		// Get Number Of Repetitions
++		return Loop;
++	}
++	
++	public void lock(int state)
++	{
++		// Set Lock State
++		Lock = state;
++	}
++
++	public int lock()
++	{
++		// Get Lock State
++		return Lock;
++	}
++	
++	public boolean isPlaying()
++	{
++		// Get Playing State
++		return sound.isActive();
++	}
++	
++	public String source()
++	{
++		// Get Repository Location
++		return AudioFileRepository;
++	}	
++}
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/CacheCleaner.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/CacheCleaner.java	(revision 0)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/CacheCleaner.java	(revision 0)
+@@ -0,0 +1,292 @@
++/*
++ * This software copyright by various authors including the RPTools.net
++ * development team, and licensed under the LGPL Version 3 or, at your option,
++ * any later version.
++ * 
++ * Portions of this software were originally covered under the Apache Software
++ * License, Version 1.1 or Version 2.0.
++ * 
++ * See the file LICENSE elsewhere in this distribution for license details.
++ * 
++ * CacheCleaner functionality added by Lord Ashes on 2013.08.02
++ * 
++ */
++
++package net.rptools.maptool.client;
++
++import java.io.File;
++import java.io.IOException;
++import java.util.List;
++import java.util.Date;
++import java.net.URL;
++import java.net.URLClassLoader;
++import java.lang.reflect.Method;
++
++public class CacheCleaner extends Thread
++{	
++	// Determines the size of a directory (in bytes)
++    private static long getDirectorySize(File dir)
++	{
++		long size = 0;
++		for (File file : dir.listFiles())
++		{
++			if (file.isFile())
++			{
++				size += file.length();
++			}
++			else
++			{
++				size += getDirectorySize(file);
++			}
++		}
++		return size;
++	}
++	
++	//
++	// Java 6 version of Cache Cleaner functionality to be executed when the client
++	// does not have Java 7 installed or does not have the Java 7 Cache Cleaner JAR installed.
++	//
++	// This function starts deleting assets based on the last modified date.
++	// It starts with a cutoff date roughly a year before the current date and works
++	// its way towards the current date deleting all assets with a Last Modified date
++	// equal to or prior to the cutoff date. After each cutoff date is processed
++	// a check is done to determine if the assetcache has been reduced below the
++	// cutoff limit. If so, the function ends if not the cutoff date is increased
++	// and the process is repeated. A exception check is included in case the cutoff
++	// date gets all the way to the current date but the assetcache is still too
++	// large. This typically means the assetcashe files are write protected.
++	private static boolean cleanupJava6(String assetDirectoryName, long cacheClean)
++	{
++		File assetDirectory = new File(assetDirectoryName);
++		// Determine the current date/time in Epoch
++		Date currentDate = new Date();
++		long cutoffDateEpoch = currentDate.getTime();
++		// Subtract roughly one year (365x24x60x60x1000)
++		long cutoffYear = new Long("32040000000");
++		cutoffDateEpoch = cutoffDateEpoch - cutoffYear; 
++
++		// Continue cleanup if assetcache exceeds cutoff limit. Note that GetDirectorySize returns bytes while cacheCutoff is in MB (thus the /1024/1024 scaling factor) 
++		while((getDirectorySize(assetDirectory)/1024/1024)>cacheClean)
++		{
++			// Get all files in the directory
++			// System.out.println("Deleting All Files Up To "+cutoffDateEpoch);
++			for (File child : assetDirectory.listFiles())
++			{
++				// Check the date of each file
++				long lastModifiedDate;
++				// Last access date not available, try using last modified date
++		        lastModifiedDate = child.lastModified();
++				if(lastModifiedDate<cutoffDateEpoch)
++				{
++					// Delete the file
++					// System.out.println("Deleting File "+child.getName()+" With Date "+lastModifiedDate);
++					child.delete();
++				}
++			}
++			// Check to see if the current date has been reached
++			if(cutoffDateEpoch==currentDate.getTime())
++			{
++				// If assetcache still exceeds limits then the files are probably write protected because at this point there should be no assets in the cache
++				if((getDirectorySize(assetDirectory)/1024/1024)>cacheClean)
++				{
++					// Return false since the clean specification were not met
++					return false;
++				}
++				else
++				{
++					// Return true since the clean specification were met
++					return true;
++				}
++			}
++			else
++			{
++				// Advanced to the next day by increasing the cutoff date 
++				cutoffDateEpoch = cutoffDateEpoch + (1000*60*60*24*1);				
++			}
++			// Adjust cutoff date if we cutoff date becomes a future date
++			if(cutoffDateEpoch>currentDate.getTime()){cutoffDateEpoch=currentDate.getTime();}
++			// System.out.println("Current Cache Size = "+(getDirectorySize(assetDirectory)/1024/1024)+"MB vs "+cacheClean+"MB");
++		}
++		return true;
++	}
++	
++	//
++	// Java 7 version of Cache Cleaner functionality to be executed when the client
++	// has Java 7 and the Java 7 Cache Cleaner JAR installed. The actual code for
++	// Java 7 Cache Cleaner is in a separate external JAR file thus allowing the
++	// MapTool application to be compiled using Java 6 to maintain compatibility
++	// with users that are using Java 6.
++	//
++	private static boolean cleanupJava7(String assetDirectory, long cacheClean)
++	{		
++		// Determine the current directory so that we can generate an absolute
++		// directory path to the relative libs sub-directory
++		String jarDir = new File("").getAbsolutePath();
++		// The external JAR file name is defined below
++		File jarFileName = new File(jarDir+"/lib/CacheCleanerJava7.jar"); 
++		// The class name is the same as the JAR file (as is typical for Java)
++		String className = "CacheCleanerJava7";
++		// The method name, in this case, is "entryPoint"
++		String methodName="clean";
++		
++		System.out.println("External JAR file = '"+jarDir+"\\lib\\CacheCleanerJava7.jar'");
++				
++		try
++		{
++			// Determine the URL of the desired JAR file
++			URL jarfile = new URL("jar", "","file:" + jarFileName.getAbsolutePath()+"!/");
++			// Load the contents of the JAR file
++			URLClassLoader classLoader = URLClassLoader.newInstance(new URL[] {jarfile });   
++			// Obtain a reference to the class embedded in the JAR file
++			Class loadedClass = classLoader.loadClass(className);
++			// Obtain a reference to the desired method of the class in the JAR file
++			Class paramTypes[] = new Class[] { String.class, long.class }; 
++			Method providedMethod = loadedClass.getDeclaredMethod(methodName, paramTypes);
++			// Invoke the method
++			providedMethod.invoke(null, assetDirectory, cacheClean);
++			return true;
++		}
++		catch(Exception e)
++		{
++			// Catch exceptions in trying to load the class
++			System.out.println("Exception: "+e.getMessage());
++			return false;
++		}
++		catch(Error e)
++		{
++			// Catch errors in trying to load the class (typically because Java 7 was not supported)
++			System.out.println("Error: "+e.getMessage());
++			return false;
++		}
++	}
++
++	// This function does a check against the cache limits set in the cache configuration file
++	// (or the defaults if one does not exist). If assetcache is less than the warning limit then
++	// the function exists with no message. If the assetcache exceeds the warning limit, a warning
++	// message is displayed but no automatic action is taken. If the assetcache exceeds the cutoff
++	// a warning message is displayed and automatic cleanup is initiated.
++	public void run()
++	{
++		long cacheWarning = 1024;
++		long cacheCutoff = 2048;
++		long cacheClean = 512;
++		String cacheVerbose = "W";
++		// Read contents of cache configuration file
++		// Defaults of cacheWarning limit (in MB) and cacheCutoff limit (in MB)
++		try
++		{
++			String cacheFile = AppUtil.getAppHome("config").getPath()+"/";
++			List<String> lines = net.rptools.lib.FileUtil.getLines(new File(cacheFile+"Cache.txt"));
++			cacheWarning = Long.parseLong(lines.get(0));
++			cacheCutoff = Long.parseLong(lines.get(1));
++			cacheClean = Long.parseLong(lines.get(2));
++			cacheVerbose = lines.get(3);
++		} 
++		catch (IOException e)
++		{
++			// Unable To Reach Cache.Txt File - Use Initialization Defaults (See Above)
++			System.out.println("Warning: Missing Cache.Txt file with Cache Cleaner configuration. Using defaults.");
++		}
++		if((!cacheVerbose.contains("Q"))&&(MapTool.JAVA_VERSION<1.7))
++		{
++			MapTool.addLocalMessage("<span style='color:#0000ff'><i>You are using the non-optimal Java6- implementation of Cache Cleaner</i></span>");
++			MapTool.addLocalMessage("<span style='color:#0000ff'><i>(Consider updating to Java7+ for optimal Cache Cleaner functionality)</i></span>");
++		}		
++		// Get assetcache size
++		long RepSize = getDirectorySize(new File(AppUtil.getAppHome("assetcache").getPath()));
++		if((RepSize/1024/1024)>cacheCutoff)
++		{
++			//
++			// Cutoff Limit Exceeded
++			//
++			// Display Information As Chat Message (If Applicable)
++			if(cacheVerbose.contains("C"))
++			{
++				MapTool.addLocalMessage("Cache: Your Cache Of "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB Exceeds Your Cutoff Limit Of "+cacheCutoff+" MB");
++				MapTool.addLocalMessage("Cache: Automatic Cleanup Initiated.");
++			}
++			// Display Information As Chat Message (If Applicable)
++			if(cacheVerbose.contains("W"))
++			{
++				MapTool.showWarning("Your Cache Of "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB Exceeds Your Cutoff Limit Of "+cacheCutoff+" MB<BR>Automatic Cleanup Initiated.");
++			}
++			// Execute Automatic Cleanup
++			boolean finishedCleanup = cacheVerbose.contains("X");
++			if((finishedCleanup==false)&&(MapTool.JAVA_VERSION>=1.7))
++			{
++				// Initiate Java 7 Version Of Cache Cleaner
++				finishedCleanup = cleanupJava7(AppUtil.getAppHome("assetcache").getPath(),cacheClean);
++				if(finishedCleanup==false)
++				{
++					// Report Error If Java 7 Cache Cleaner Failed To Clean
++					if(cacheVerbose.contains("C")){MapTool.addLocalMessage("Cache: Failed To Run Java 7 Version Of Cache Cleaner.");}
++					if(cacheVerbose.contains("C")){MapTool.addLocalMessage("Cache: Resorting To Java 6 Implementation.");}
++					if(cacheVerbose.contains("W")){MapTool.showWarning("Cache: Failed To Run Java 7 Version Of Cache Cleaner.<BR>Resorting To Java 6 Implementation.");}
++				}
++			}
++			if(finishedCleanup==false)
++			{
++				// Initiate Java 6 (Fall Back) Version Of Cache Cleaner
++				finishedCleanup = cleanupJava6(AppUtil.getAppHome("assetcache").getPath(),cacheClean);
++				if(finishedCleanup==false)
++				{
++					// Report Error If Java 6 Cache Cleaner Failed To Clean
++					if(cacheVerbose.contains("C")){MapTool.addLocalMessage("Cache: Failed To Run Java 6 Version Of Cache Cleaner.");}
++					if(cacheVerbose.contains("W")){MapTool.showWarning("Cache: Failed To Run Java 6 Version Of Cache Cleaner.");}					
++				}
++			}
++			// Re-evaluate assetCache Directory Size
++			RepSize = getDirectorySize(new File(AppUtil.getAppHome("assetcache").getPath()));
++			// Display Information As Chat Message (If Applicable)
++			if(cacheVerbose.contains("C"))
++			{
++				MapTool.addLocalMessage("Cache: Your Cache Is Now "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB");
++			}
++			// Display Information As Chat Message (If Applicable)
++			if(cacheVerbose.contains("W"))
++			{
++				MapTool.showWarning("Your Cache Is Now "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB");
++			}			
++		}
++		else if((RepSize/1024/1024)>cacheWarning)
++		{
++			//
++			// Warning Limit Exceeded
++			//
++			// Display Information As Chat Message (If Applicable)
++			if(cacheVerbose.contains("C"))
++			{
++				MapTool.addLocalMessage("Cache: Your Cache Of "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB Exceeds Your Warning Limit Of "+cacheWarning+" MB");
++				MapTool.addLocalMessage("Cache: Automatic Cleanup Will Occur When Cache Reached "+cacheCutoff+"MB.");
++			}
++			// Display Information As Warning Message (If Applicable)
++			if(cacheVerbose.contains("W"))
++			{
++				MapTool.showWarning("Your Cache Of "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB Exceeds Your Warning Limit Of "+cacheWarning+" MB<BR>Automatic Cleanup Will Occur When Cache Reached "+cacheCutoff+"MB.");
++			}
++		}
++		else
++		{
++			// If Quiet Mode Is Not Used, Provide Cache Information As Chat Message 
++			if(!cacheVerbose.contains("Q"))
++			{
++				if(MapTool.JAVA_VERSION<1.7)
++				{
++					MapTool.addLocalMessage("<I>Cache:</I> Cleaner Version: Fall-Back (Java 6)");
++				}
++				else
++				{
++					MapTool.addLocalMessage("<I>Cache:</I> Cleaner Version: Optimal (Java 7)");				
++				}
++				MapTool.addLocalMessage("<I>Cache:</I> Cache Warning At "+cacheWarning+" MB");
++				MapTool.addLocalMessage("<I>Cache:</I> Cache Cutoff At "+cacheCutoff+" MB");
++				MapTool.addLocalMessage("<I>Cache:</I> Cache Clean To "+cacheClean+"MB");
++			}
++			// If Information Mode Is Used, Provide Cache Information As Infromation Popup 
++			if(cacheVerbose.contains("I"))
++			{
++				MapTool.showInformation("Your Cache Of "+(Math.floor((RepSize/1024/1024)*100)/100)+" MB Is Within Limits<BR>Cache Warning At "+cacheWarning+" MB<BR>Cache Cutoff At "+cacheCutoff+" MB<BR>Cache Celan To "+cacheClean+"MB");
++			}
++		}
++	}
++}
+\ No newline at end of file
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/functions/SoundFunctions.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/functions/SoundFunctions.java	(revision 0)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/functions/SoundFunctions.java	(revision 0)
+@@ -0,0 +1,210 @@
++/*
++ *  This software copyright by various authors including the RPTools.net
++ *  development team, and licensed under the LGPL Version 3 or, at your
++ *  option, any later version.
++ *
++ *  Portions of this software were originally covered under the Apache
++ *  Software License, Version 1.1 or Version 2.0.
++ *
++ *  See the file LICENSE elsewhere in this distribution for license details.
++ */
++
++package net.rptools.maptool.client.functions;
++
++import java.util.List;
++
++import net.rptools.maptool.client.MapTool;
++import net.rptools.parser.Parser;
++import net.rptools.parser.ParserException;
++import net.rptools.parser.function.AbstractFunction;
++
++public class SoundFunctions extends AbstractFunction {
++	private static final SoundFunctions instance = new SoundFunctions();
++
++	private SoundFunctions() {
++		super(0, 1, "playSound", "playSoundLocal", "stopSound","loopSound","setChannel","lockChannel","earPlugs","cacheSound","audioRepository");
++	}
++
++	public static SoundFunctions getInstance() {
++		return instance;
++	}
++
++	@Override
++	public Object childEvaluate(Parser parser, String functionName,
++			List<Object> parameters) throws ParserException {
++		
++		if (functionName.equals("playSound")) { return playSound(parameters.get(0).toString()); }
++		else if (functionName.equals("playSoundLocal")) { return playSoundLocal(parameters.get(0).toString()); }
++		else if (functionName.equals("stopSound")) { return stopSound(parameters.get(0).toString()); }
++		else if (functionName.equals("loopSound")) { return loopSound(parameters.get(0).toString()); }
++		else if (functionName.equals("setChannel")) { return setChannel(parameters.get(0).toString()); }
++		else if (functionName.equals("lockChannel")) { return lockChannel(parameters.get(0).toString()); }
++		else if (functionName.equals("earPlugs")) { return earPlugs(parameters.get(0).toString()); }
++		else if (functionName.equals("cacheSound")) { return cacheSound(parameters.get(0).toString()); }
++		else /* audioRepository */ { return audioRepository(parameters.get(0).toString()); }				
++	}
++
++	/**
++	 * Plays Audio File Using Current Channel
++	 * @param Audio File to be played.
++	 * @return Audio Cue For Playing.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object playSound(String AudioFile) throws ParserException {
++		System.out.println("Playing Sound '"+AudioFile+"' On Channel "+MapTool.currentChannel);
++		String suffix;
++		if(MapTool.AudioChannels[MapTool.currentChannel].loops()==1){suffix="";}else{suffix="(x"+MapTool.AudioChannels[MapTool.currentChannel].loops()+")";}
++		if(AudioFile.equals("")){suffix="";}
++		System.out.println("Player: "+MapTool.getPlayer().getName());
++		System.out.println("GM: "+MapTool.getPlayer().isGM());
++		System.out.println("Lock: "+MapTool.AudioChannels[MapTool.currentChannel].lock());
++		if((MapTool.getPlayer().isGM()==false)&&(MapTool.AudioChannels[MapTool.currentChannel].lock()==1))
++		{
++			return "GM has locked this functionality. Only GM can send audio cues."; 
++		}
++		else
++		{
++			return "&#"+(9833+MapTool.currentChannel)+";"+AudioFile+"&#"+(9833+MapTool.currentChannel)+";"+suffix;
++		}
++	}
++
++	/**
++	 * Plays Audio File Using Current Channel
++	 * @param Audio File to be played.
++	 * @return Audio Cue For Playing.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object stopSound(String Method) throws ParserException {
++		System.out.println("Stopping Sound On Channel "+MapTool.currentChannel);
++		String suffix;
++		if(Integer.parseInt(Method)==0){suffix="";}else{suffix="(x0)";}
++		System.out.println("Player: "+MapTool.getPlayer().getName());
++		System.out.println("GM: "+MapTool.getPlayer().isGM());
++		System.out.println("Lock: "+MapTool.AudioChannels[MapTool.currentChannel].lock());
++		if((MapTool.getPlayer().isGM()==false)&&(MapTool.AudioChannels[MapTool.currentChannel].lock()==1))
++		{
++			return "GM has locked this functionality. Only GM can send audio cues."; 
++		}
++		else
++		{
++			return "&#"+(9833+MapTool.currentChannel)+";&#"+(9833+MapTool.currentChannel)+";"+suffix;
++		}
++	}
++	
++	/**
++	 * Plays Audio File Using Current Channel
++	 * @param Audio File to be played.
++	 * @return Play Success (True/False).
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object playSoundLocal(String AudioSrc) throws ParserException {
++		System.out.println("Playing Sound '"+AudioSrc+"' Locally On Channel "+MapTool.currentChannel);
++		if(!AudioSrc.equals(""))
++		{
++			// Play File
++			try
++			{
++				if(MapTool.AudioChannelThreads[MapTool.currentChannel].isAlive())		// Check If Thread Is Already In Use
++				{
++					MapTool.AudioChannelThreads[MapTool.currentChannel].interrupt();	// Interrupt Thread
++					MapTool.AudioChannelThreads[MapTool.currentChannel].join();			// Wait For Thread To Finish
++				}
++			}
++			catch(Exception e)
++			{
++				// Issues With Interruption?
++			}
++			MapTool.AudioChannels[MapTool.currentChannel].play(AudioSrc+".wav");
++			MapTool.AudioChannelThreads[MapTool.currentChannel] = new Thread(MapTool.AudioChannels[MapTool.currentChannel]);
++			MapTool.AudioChannelThreads[MapTool.currentChannel].start();
++		}
++		else
++		{
++			// Stop Audio
++			MapTool.AudioChannelThreads[MapTool.currentChannel].interrupt();
++		}
++		return "";
++	}
++	
++	/**
++	 * Sets The Repetitions For The Current Channel
++	 * @param Repetitions.
++	 * @return Repetitions.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object loopSound(String Reps) throws ParserException {
++		MapTool.AudioChannels[MapTool.currentChannel].loops(Integer.parseInt(Reps));
++		return Integer.parseInt(Reps);
++	}
++	
++	/**
++	 * Sets The Current Channel
++	 * @param Desired Channel.
++	 * @return Desired Channel.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object setChannel(String Channel) throws ParserException {
++		MapTool.currentChannel = Integer.parseInt(Channel)-1;
++		return Integer.parseInt(Channel);
++	}
++
++	/**
++	 * Determines If Only GM Can Make Audio Requests
++	 * @param GM Setting (0=All/1=GM Only).
++	 * @return GM Setting.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object lockChannel(String Setting) throws ParserException {
++		if(MapTool.getPlayer().isGM()==true)
++		{
++			MapTool.AudioChannels[MapTool.currentChannel].lock(Integer.parseInt(Setting));
++			if(Integer.parseInt(Setting)==0)
++			{
++				return "&#9833;&#187;&#9833;";		
++			}
++			else
++			{
++				return "&#9833;&#215;&#9833;";
++			}
++		}
++		else
++		{
++			return "Only the GM can use the lockChannel Macro Function.";
++		}
++	}
++	
++	/**
++	 * Sets The Current Channel Mute Setting
++	 * @param tokenInContext The token in context.
++	 * @param Mute Setting (0=Unmute/1=Mute).
++	 * @return Mute Setting.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object earPlugs(String Setting) throws ParserException {
++		MapTool.AudioChannels[MapTool.currentChannel].mute(Integer.parseInt(Setting));
++		return Integer.parseInt(Setting);
++	}
++
++	/**
++	 * Cahces Audio File For Later Use
++	 * @param Audio File to be played.
++	 * @return Audio Cue For Caching.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object cacheSound(String AudioFile) throws ParserException {
++		return "&#9833;Cache:"+AudioFile+"&#9833;";
++	}
++	
++	/**
++	 * Changed The AudioRepositoryLocation For The Session
++	 * @param tokenInContext The token in context.
++	 * @param New Location (e.g. http://www.mysounds.com:8080/Sounds)
++	 * @return New Location.
++	 * @throws ParserException if an error occurs.
++	 */
++	public static Object audioRepository(String Setting) throws ParserException {
++		MapTool.AudioRepositoryLocation = Setting;
++		return MapTool.AudioRepositoryLocation;
++	}
++	
++}
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/functions/TokenPropertyFunctions.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/functions/TokenPropertyFunctions.java	(revision 5987)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/functions/TokenPropertyFunctions.java	(working copy)
+@@ -17,6 +17,7 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.HashSet;
++import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Map.Entry;
+@@ -29,6 +30,8 @@
+ import net.rptools.maptool.client.ui.zone.ZoneRenderer;
+ import net.rptools.maptool.language.I18N;
+ import net.rptools.maptool.model.GUID;
++import net.rptools.maptool.model.ObservableList;
++import net.rptools.maptool.model.Player;
+ import net.rptools.maptool.model.Grid;
+ import net.rptools.maptool.model.Token;
+ import net.rptools.maptool.model.TokenFootprint;
+@@ -655,11 +658,30 @@
+ 			String s = parameters.get(0).toString();
+ 			if (StringUtil.isEmpty(s)) {
+ 				// Do nothing when trusted, since all ownership should be turned off for an empty string used in such a macro.
++			} else if (s.equalsIgnoreCase("ALL")) {
++				// Select The Owned By All Checkbox
++				token.setOwnedByAll(true);
+ 			} else {
+ 				Object json = JSONMacroFunctions.asJSON(parameters.get(0));
+ 				if (json != null && json instanceof JSONArray) {
+-					for (Object o : (JSONArray) json) {
+-						token.addOwner(o.toString());
++
++					/* Compare Provided List To Full Player List */
++					ObservableList<Player> players = MapTool.getPlayerList();
++					String[] playerArray = new String[players.size()];
++					Iterator<Player> iter = players.iterator();
++					int i = 0;
++					while (iter.hasNext()) {
++						playerArray[i] = iter.next().getName();
++						i++;
++					}
++										
++					if(json.toString().equals(JSONArray.fromObject(playerArray).toString())) {
++						// Select The Owned By All Checkbox
++						token.setOwnedByAll(true);	
++					} else {
++						for (Object o : (JSONArray) json) {
++							token.addOwner(o.toString());
++						}
+ 					}
+ 				} else {
+ 					token.addOwner(s);
+@@ -971,12 +993,33 @@
+ 	 * @return a string list of the token owners.
+ 	 */
+ 	public String getOwners(Token token, String delim) {
+-		String[] owners = new String[token.getOwners().size()];
+-		token.getOwners().toArray(owners);
+-		if ("json".endsWith(delim)) {
+-			return JSONArray.fromObject(owners).toString();
+-		} else {
+-			return StringFunctions.getInstance().join(owners, delim);
++		if(token.isOwnedByAll())
++		{
++			/* Owned By All - Return Current Player List */
++			ObservableList<Player> players = MapTool.getPlayerList();
++			String[] playerArray = new String[players.size()];
++			Iterator<Player> iter = players.iterator();
++			int i = 0;
++			while (iter.hasNext()) {
++				playerArray[i] = iter.next().getName();
++				i++;
++			}
++			if ("json".endsWith(delim)) {
++				return JSONArray.fromObject(playerArray).toString();
++			} else {
++				return StringFunctions.getInstance().join(playerArray, delim);
++			}
++		}
++		else
++		{
++			/* Owned By Some/None - Return Owners List */
++			String[] owners = new String[token.getOwners().size()];
++			token.getOwners().toArray(owners);
++			if ("json".endsWith(delim)) {
++				return JSONArray.fromObject(owners).toString();
++			} else {
++				return StringFunctions.getInstance().join(owners, delim);
++			}
+ 		}
+ 	}
+ 
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/MapTool.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/MapTool.java	(revision 5987)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/MapTool.java	(working copy)
+@@ -42,6 +42,10 @@
+ import java.util.List;
+ import java.util.Locale;
+ 
++import java.nio.charset.Charset;
++import java.nio.file.Files;
++import java.nio.file.Paths;
++
+ import javax.imageio.ImageIO;
+ import javax.swing.BorderFactory;
+ import javax.swing.ImageIcon;
+@@ -65,6 +69,8 @@
+ import net.rptools.lib.net.RPTURLStreamHandlerFactory;
+ import net.rptools.lib.sound.SoundManager;
+ import net.rptools.lib.swing.SwingUtil;
++import net.rptools.maptool.client.CacheCleaner;
++import net.rptools.maptool.client.AudioChannel;
+ import net.rptools.maptool.client.functions.UserDefinedMacroFunctions;
+ import net.rptools.maptool.client.swing.MapToolEventQueue;
+ import net.rptools.maptool.client.swing.NoteFrame;
+@@ -181,6 +187,11 @@
+ 	private static EventDispatcher eventDispatcher;
+ 	private static MapToolLineParser parser = new MapToolLineParser();
+ 	private static String lastWhisperer;
++	
++	public static String AudioRepositoryLocation = "";
++	public static int currentChannel = 0;
++	public static AudioChannel[] AudioChannels = new AudioChannel[2];
++	public static Thread[] AudioChannelThreads = new Thread[2];
+ 
+ 	/**
+ 	 * This method looks up the message key in the properties file and returns
+@@ -636,6 +647,11 @@
+ 		ToolTipManager.sharedInstance().setInitialDelay(AppPreferences.getToolTipInitialDelay());
+ 		ToolTipManager.sharedInstance().setDismissDelay(AppPreferences.getToolTipDismissDelay());
+ 		ChatAutoSave.changeTimeout(AppPreferences.getChatAutosaveTime());
++			
++		// Audio Channels
++		
++		AudioChannels[0] = new AudioChannel();
++		AudioChannels[1] = new AudioChannel();
+ 
+ 		// TODO: make this more formal when we switch to mina
+ 		new ServerHeartBeatThread().start();
+@@ -663,7 +679,7 @@
+ 
+ 	public static String getVersion() {
+ 		if (version == null) {
+-			version = "DEVELOPMENT";
++			version = "1.3.b89.cge.cc.s.rev1";
+ 			try {
+ 				if (MapTool.class.getClassLoader().getResource(VERSION_TXT) != null) {
+ 					version = new String(FileUtil.loadResource(VERSION_TXT));
+@@ -1192,6 +1208,50 @@
+ 		final Toolkit tk = Toolkit.getDefaultToolkit();
+ 		tk.getSystemEventQueue().push(new MapToolEventQueue());
+ 
++		//
++		// Audio Repository Location
++		// 
++		// Read from Repository.Audio.txt from Config Path or Jar File Directory
++		List<String> lines;
++		String checkURL;
++		try 
++		{
++			checkURL = AppUtil.getAppHome("config").getPath()+"/";
++			System.out.println("Checking For Repository.Audio.Txt in "+checkURL);
++			lines = Files.readAllLines(Paths.get(checkURL+"Repository.Audio.txt"),Charset.defaultCharset());
++			for (String line : lines)
++			{
++				if(line.length()>2)
++				{
++					AudioRepositoryLocation=line;
++					System.out.println("Setting Location To "+line);
++				}
++			}
++		} 
++		catch (IOException e)
++		{
++			// Repository.Audio.Txt file is not present in Config directory
++		}
++		try {
++			File dir = new File(MapTool.class.getProtectionDomain().getCodeSource().getLocation().toURI());
++			checkURL = dir.getParentFile().toString();
++			System.out.println("Checking For Repository.Audio.Txt in "+checkURL);
++			lines = Files.readAllLines(Paths.get(checkURL+"/Repository.Audio.txt"),Charset.defaultCharset());
++			for (String line : lines)
++			{
++				if(line.length()>2)
++				{
++					AudioRepositoryLocation=line;
++					System.out.println("Setting Location To "+line);
++				}
++			}
++		}
++		catch(Exception x)
++		{
++			// Repository.Audio.Txt file is not present in JAR directory
++			System.out.println(x.getMessage());
++		}				
++		
+ 		// LAF
+ 		try {
+ 			// If we are running under Mac OS X then save native menu bar look & feel components
+@@ -1409,6 +1469,10 @@
+ 		getAutoSaveManager().restart();
+ 
+ 		taskbarFlasher = new TaskBarFlasher(clientFrame);
++		
++		// Clean up the cache
++		CacheCleaner cacheCleanerAgent = new CacheCleaner();
++		cacheCleanerAgent.start();
+ 	}
+ 
+ 	/**
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/MapToolLineParser.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/MapToolLineParser.java	(revision 5987)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/MapToolLineParser.java	(working copy)
+@@ -75,6 +75,7 @@
+ import net.rptools.maptool.client.functions.TokenStateFunction;
+ import net.rptools.maptool.client.functions.TokenVisibleFunction;
+ import net.rptools.maptool.client.functions.UserDefinedMacroFunctions;
++import net.rptools.maptool.client.functions.SoundFunctions;
+ import net.rptools.maptool.client.functions.VBL_Functions;
+ import net.rptools.maptool.client.functions.getInfoFunction;
+ import net.rptools.maptool.client.functions.isVisibleFunction;
+@@ -111,7 +112,7 @@
+ 			TokenInitHoldFunction.getInstance(), TokenLabelFunction.getInstance(), TokenLightFunctions.getInstance(), TokenLocationFunctions.getInstance(), TokenNameFunction.getInstance(),
+ 			TokenNoteFunctions.getInstance(), TokenPropertyFunctions.getInstance(), TokenRemoveFromInitiativeFunction.getInstance(), TokenSelectionFunctions.getInstance(),
+ 			TokenSightFunctions.getInstance(), TokenSpeechFunctions.getInstance(), TokenStateFunction.getInstance(), TokenVisibleFunction.getInstance(), UserDefinedMacroFunctions.getInstance(),
+-			isVisibleFunction.getInstance(), getInfoFunction.getInstance(), TokenMoveFunctions.getInstance(), FogOfWarFunctions.getInstance(), VBL_Functions.getInstance() };
++			isVisibleFunction.getInstance(), getInfoFunction.getInstance(), TokenMoveFunctions.getInstance(), FogOfWarFunctions.getInstance(), VBL_Functions.getInstance(), SoundFunctions.getInstance() };
+ 
+ 	/** Name and Source or macros that come from chat. */
+ 	public static final String CHAT_INPUT = "chat";
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/AbstractTokenPopupMenu.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/AbstractTokenPopupMenu.java	(revision 5987)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/AbstractTokenPopupMenu.java	(working copy)
+@@ -11,6 +11,7 @@
+ 
+ package net.rptools.maptool.client.ui;
+ 
++import java.awt.Color;
+ import java.awt.Dimension;
+ import java.awt.Image;
+ import java.awt.event.ActionEvent;
+@@ -31,6 +32,7 @@
+ import javax.swing.JMenu;
+ import javax.swing.JMenuItem;
+ import javax.swing.JPopupMenu;
++import javax.swing.JSeparator;
+ import javax.swing.KeyStroke;
+ import javax.swing.text.JTextComponent;
+ 
+@@ -308,6 +310,27 @@
+ 		add(menu);
+ 	}
+ 
++	protected void addOwnedMacros(JMenu menu) {
++		if (menu == null) {
++			return;
++		}
++		JMenuItem item;
++		while(menu.getItemCount()>0)
++		{
++			item = menu.getItem(0);
++			if(item.getText().contains("!-"))
++			{
++				item.setText(item.getText().replace("!-","")+":");
++				item.setBackground(Color.LIGHT_GRAY);
++			}			
++			else
++			{
++				item.setText("   "+item.getText());
++			}
++			add(item);
++		}
++	}
++	
+ 	protected ZoneRenderer getRenderer() {
+ 		return renderer;
+ 	}
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/commandpanel/MessagePanel.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/commandpanel/MessagePanel.java	(revision 5987)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/commandpanel/MessagePanel.java	(working copy)
+@@ -24,6 +24,10 @@
+ import java.util.HashSet;
+ import java.util.regex.Matcher;
+ import java.util.regex.Pattern;
++import java.net.URI;
++import java.net.URL;
++
++import java.nio.file.Paths;
+ 
+ import javax.swing.JEditorPane;
+ import javax.swing.JPanel;
+@@ -35,6 +39,10 @@
+ import javax.swing.text.Element;
+ import javax.swing.text.html.HTMLDocument;
+ import javax.swing.text.html.StyleSheet;
++import javax.sound.sampled.AudioInputStream;
++import javax.sound.sampled.AudioSystem;
++import javax.sound.sampled.Clip;
++import javax.sound.sampled.Line;
+ 
+ import net.rptools.maptool.client.AppPreferences;
+ import net.rptools.maptool.client.MapTool;
+@@ -169,6 +177,8 @@
+ 		EventQueue.invokeLater(new Runnable() {
+ 			public void run() {
+ 				String output;
++				
++				int SelectedChannel = 0;
+ 
+ 				{
+ 					StringBuffer text = new StringBuffer();
+@@ -208,7 +218,86 @@
+ 					}
+ 					m.appendTail(text);
+ 					output = text.toString();
++														
++					// Check For Audio Cue
++									
++					if((output.indexOf("&#9833;")>-1)||(output.indexOf("&#9834;")>-1)) // ||((output.indexOf("&#9835;")>-1)||(output.indexOf("&#9836;")>-1))
++					{
++						String AudioSrc = output;
++						String Loops = "";
++						int Channel = 1;
++						AudioSrc=AudioSrc.substring(AudioSrc.indexOf("&#983")+5); 		// Find Audio Cue
++						Channel = Integer.parseInt(AudioSrc.substring(0,1))-3;  		// Determine Audio Channel From Audio Cue
++						AudioSrc=AudioSrc.substring(2);									// Parse To Audio Content
++						Loops = AudioSrc.substring(AudioSrc.indexOf("&#98")+7);			// Parse Post Content Parameter (Number Of Loops If Present)
++						AudioSrc=AudioSrc.substring(0,AudioSrc.indexOf("&#98"));		// Constrain AudioSrc To Content
++						if(Loops.substring(0,1).equals("("))							// Check If Repetitions Are Provided
++						{
++							Loops = Loops.substring(2, Loops.indexOf(")"));				// Extract Repetitions
++						}
++						else
++						{
++							Loops = "1";												// Default Repetitions Is 1
++						}
++						
++						// Play Audio Message
++						
++						// Note: We Do Not Set MapTool.CurrentChannel So That Local Session Maintains Its Last Used CurrentChannel
++						
++						MapTool.AudioChannels[Channel].loops(Integer.parseInt(Loops)); // Set Repetitions
++						if(AudioSrc.equals("&#215;"))
++						{
++							// GM Lock
++							MapTool.AudioChannels[Channel].lock(1);
++						}
++						else if(AudioSrc.equals("&#187;"))
++						{
++							// GM Lock
++							MapTool.AudioChannels[Channel].lock(0);						
++						}
++						else if((!AudioSrc.equals(""))&&(AudioSrc.indexOf("Cache:")==-1))
++						{
++							// Play File
++							try
++							{
++								if(MapTool.AudioChannelThreads[Channel].isAlive())		// Check If Thread Is Already In Use
++								{
++									MapTool.AudioChannelThreads[Channel].interrupt();	// Interrupt Thread
++									MapTool.AudioChannelThreads[Channel].join();		// Wait For Thread To Finish
++								}
++							}
++							catch(Exception e)
++							{
++								// Issues With Interruption?
++							}
++							MapTool.AudioChannels[Channel].play(AudioSrc+".wav");
++							MapTool.AudioChannelThreads[Channel] = new Thread(MapTool.AudioChannels[Channel]);
++							MapTool.AudioChannelThreads[Channel].start();
++						}
++						else if(AudioSrc.indexOf("Cache:")>-1)
++						{
++							// Cache Audio
++							AudioSrc = AudioSrc.replace("Cache:", "");
++							MapTool.AudioChannels[Channel].play(AudioSrc+".wav");
++							MapTool.AudioChannels[Channel].cacheAudio();
++						}
++						else
++						{
++							// Stop Audio
++							if(Integer.parseInt(Loops)==0)
++							{
++								System.out.println("Graceful Audio Stop");
++								MapTool.AudioChannels[Channel].finish();
++							}
++							else
++							{
++								System.out.println("Immediate Audio Stop");
++								MapTool.AudioChannelThreads[Channel].interrupt();
++							}
++						}
++					}
+ 				}
++					
+ 				// Auto inline expansion for {HTTP|HTTPS} URLs
+ //				output = output.replaceAll("(^|\\s|>|\002)(https?://[\\w.%-/~?&+#=]+)", "$1<a href='$2'>$2</a>");
+ 				output = output.replaceAll("(^|\\s|>|\002)(https?://[^<>\002\003]+)", "$1<a href='$2'>$2</a>");
+Index: C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/TokenPopupMenu.java
+===================================================================
+--- C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/TokenPopupMenu.java	(revision 5987)
++++ C:/Users/Ondrej/Eclipse Workspace/maptool/src/net/rptools/maptool/client/ui/TokenPopupMenu.java	(working copy)
+@@ -74,26 +74,28 @@
+ 	public TokenPopupMenu(Set<GUID> selectedTokenSet, int x, int y, ZoneRenderer renderer, Token tokenUnderMouse) {
+ 		super(selectedTokenSet, x, y, renderer, tokenUnderMouse);
+ 
+-		add(new SetFacingAction());
+-		add(new ClearFacingAction());
+-		add(new StartMoveAction());
+-		addOwnedItem(new ImpersonateAction());
+-		addOwnedItem(createSizeMenu());
+-		addOwnedItem(createMacroMenu());
+-		addOwnedItem(createSpeechMenu());
++		// add(new SetFacingAction());
++		// add(new ClearFacingAction());
++		// add(new StartMoveAction());
++		// addOwnedItem(new ImpersonateAction());
++		// addOwnedItem(createSizeMenu());
++		// addOwnedItem(createMacroMenu());
++		addOwnedMacros(createMacroMenu());
++		// addOwnedItem(createSpeechMenu());
+ 		addOwnedItem(createStateMenu());
+-		addOwnedItem(createBarMenu());
+-		addOwnedItem(createInitiativeMenu());
+-		if (MapTool.getFrame().getInitiativePanel().hasOwnerPermission(tokenUnderMouse))
+-			add(new ChangeInitiativeState("initiative.menu.addToInitiative"));
+-		addOwnedItem(createFlipMenu());
+-		if (getTokenUnderMouse().getCharsheetImage() != null && AppUtil.playerOwns(getTokenUnderMouse())) {
+-			add(new ShowHandoutAction());
+-		}
+-		add(createHaloMenu());
+-		addOwnedItem(createArrangeMenu());
+-		addGMItem(createChangeToMenu(Zone.Layer.GM, Zone.Layer.OBJECT, Zone.Layer.BACKGROUND));
++		// addOwnedItem(createBarMenu());
++		// addOwnedItem(createInitiativeMenu());
++		// if (MapTool.getFrame().getInitiativePanel().hasOwnerPermission(tokenUnderMouse))
++		// 	add(new ChangeInitiativeState("initiative.menu.addToInitiative"));
++		// addOwnedItem(createFlipMenu());
++		// if (getTokenUnderMouse().getCharsheetImage() != null && AppUtil.playerOwns(getTokenUnderMouse())) {
++		// 	add(new ShowHandoutAction());
++		// }
++		// add(createHaloMenu());
++		// addOwnedItem(createArrangeMenu());
+ 		add(new JSeparator());
++		addGMItem(createChangeToMenu(Zone.Layer.GM, Zone.Layer.OBJECT, Zone.Layer.BACKGROUND));
++		// add(new JSeparator());
+ 
+ 		/*
+ 		 * This adds the expose menu to token right click when the player is GM and the server setting is set to use
+@@ -99,11 +101,11 @@
+ 		 * This adds the expose menu to token right click when the player is GM and the server setting is set to use
+ 		 * individual FOW
+ 		 */
+-		if (MapTool.getPlayer().isGM() && MapTool.getServerPolicy().isUseIndividualFOW()) {
+-			add(createExposedFOWMenu());
+-		}
+-		if (MapTool.getPlayer().isGM() || MapTool.getServerPolicy().getPlayersCanRevealVision()) {
+-			add(createExposeMenu());
++		// if (MapTool.getPlayer().isGM() && MapTool.getServerPolicy().isUseIndividualFOW()) {
++		// 	add(createExposedFOWMenu());
++		// }
++		// if (MapTool.getPlayer().isGM() || MapTool.getServerPolicy().getPlayersCanRevealVision()) {
++		//	add(createExposeMenu());
+ //			if (MapTool.getPlayer().isGM()) {
+ //				addGMItem(createVisionMenu());
+ //			}
+@@ -108,27 +110,30 @@
+ //				addGMItem(createVisionMenu());
+ //			}
+ //			add(new JSeparator());
+-		}
+-		addOwnedItem(createLightSourceMenu());
+-		add(new JSeparator());
++		// }
++		// addOwnedItem(createLightSourceMenu());
++		// add(new JSeparator());
+ 
+-		addToggledItem(new ShowPathsAction(), renderer.isPathShowing(tokenUnderMouse));
++		// addToggledItem(new ShowPathsAction(), renderer.isPathShowing(tokenUnderMouse));
+ 		addToggledItem(new SnapToGridAction(tokenUnderMouse.isSnapToGrid(), renderer), tokenUnderMouse.isSnapToGrid());
+-		addToggledGMItem(new VisibilityAction(), tokenUnderMouse.isVisible());
+-		add(new JSeparator());
++		// addToggledGMItem(new VisibilityAction(), tokenUnderMouse.isVisible());
++		// add(new JSeparator());
+ 
+-		add(new JMenuItem(new CutAction()));
+-		add(new JMenuItem(new CopyAction()));
+-		add(new JMenuItem(new DeleteAction()));
+-		add(new JSeparator());
++		// add(new JMenuItem(new CutAction()));
++		// add(new JMenuItem(new CopyAction()));
++		// add(new JMenuItem(new DeleteAction()));
++		// add(new JSeparator());
+ 
+-		add(new RevertLastMoveAction());
+-		add(new ShowPropertiesDialogAction());
+-		addOwnedItem(new SaveAction());
++		// add(new RevertLastMoveAction());
++		if (MapTool.getPlayer().isGM()) {
++			add(new ShowPropertiesDialogAction());
++		}
++		// addOwnedItem(new SaveAction());
+ 	}
+ 
+ 	protected JMenu createMacroMenu() {
+-		if (selectedTokenSet.size() != 1 || getTokenUnderMouse().getMacroNames(true).size() == 0) {
++		// if (selectedTokenSet.size() != 1 || getTokenUnderMouse().getMacroNames(true).size() == 0) {
++		if (getTokenUnderMouse().getMacroNames(true).size() == 0) {
+ 			return null;
+ 		}
+ 		JMenu macroMenu = new JMenu("Macros");
+@@ -133,23 +138,15 @@
+ 		}
+ 		JMenu macroMenu = new JMenu("Macros");
+ 		List<MacroButtonProperties> macroList = getTokenUnderMouse().getMacroList(true);
+-		String group = "";
+ 		Collections.sort(macroList);
+-		Map<String, JMenu> groups = new TreeMap<String, JMenu>();
++		String MacroGroup = "";
+ 		for (MacroButtonProperties macro : macroList) {
+-			group = macro.getGroup();
+-			group = (group == null || group.isEmpty() ? " General" : group); // leading space makes it come first
+-			JMenu submenu = groups.get(group);
+-			if (submenu == null) {
+-				submenu = new JMenu(group);
+-				groups.put(group, submenu);
++			if(!macro.getGroup().equals(MacroGroup)){
++				macroMenu.add(new RunMacroAction("!-"+macro.getGroup(), macro));
+ 			}
+-			submenu.add(new RunMacroAction(macro.getLabel(), macro));
++			MacroGroup=macro.getGroup();
++			macroMenu.add(new RunMacroAction(macro.getLabel(), macro));
+ 		}
+-		// Add the group menus in alphabetical order
+-		for (JMenu submenu : groups.values())
+-			macroMenu.add(submenu);
+-
+ 		return macroMenu;
+ 	}
+ 
